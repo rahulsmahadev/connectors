@@ -19,7 +19,9 @@ package io.delta.standalone.internal.util
 import com.fasterxml.jackson.databind.JsonNode
 
 import io.delta.standalone.expressions.{And, Column, EqualTo, Expression, GreaterThanOrEqual, LessThanOrEqual, Literal}
-import io.delta.standalone.types.{DataType, LongType, StructField, StructType}
+import io.delta.standalone.types.{BooleanType, ByteType, DataType, DoubleType, FloatType, IntegerType, LongType, ShortType, StructField, StructType}
+
+import io.delta.standalone.internal.exception.DeltaErrors
 
 private[internal] object DataSkippingUtils {
 
@@ -38,6 +40,10 @@ private[internal] object DataSkippingUtils {
   final val fileStatsPathLength = 1
   /* The column-specific stats column contains column type and column name. e.g.: MIN.col1 */
   final val columnStatsPathLength = 2
+
+  /* Supported data types in column stats filter */
+  final val supportedDataType = Seq(new BooleanType, new ByteType, new DoubleType,
+    new FloatType, new IntegerType, new LongType, new ShortType)
 
   /**
    * Build stats schema based on the schema of data columns, the first layer
@@ -108,9 +114,8 @@ private[internal] object DataSkippingUtils {
    * fileStats = Map("[[NUM_RECORDS]]" -> 3)
    * columnStats = Map("[[MIN]].a" -> 2, "[[MIN]].b" -> 1)
    *
-   * Currently nested column is not supported, only [[LongType]] is the supported data type, if
-   * encountered a wrong data type with a known stats type, the method will raise error and should
-   * be handled by caller.
+   * If encountered a wrong data type with a known stats type, the method will raise error and
+   * should be handled by caller.
    *
    * @param dataSchema  The schema of data columns in table.
    * @param statsString The JSON-formatted stats in raw string type in table metadata files.
@@ -120,9 +125,9 @@ private[internal] object DataSkippingUtils {
    */
   def parseColumnStats(
       dataSchema: StructType,
-      statsString: String): (Map[String, Long], Map[String, Long]) = {
-    var fileStats = Map[String, Long]()
-    var columnStats = Map[String, Long]()
+      statsString: String): (Map[String, String], Map[String, String]) = {
+    var fileStats = Map[String, String]()
+    var columnStats = Map[String, String]()
 
     val dataColumns = dataSchema.getFields
     JsonUtils.fromJson[Map[String, JsonNode]](statsString).foreach { stats =>
@@ -130,8 +135,10 @@ private[internal] object DataSkippingUtils {
       val statsObj = stats._2
       if (!statsObj.isObject) {
         // This is an file-specific stats, like ROW_RECORDS.
+        val statsVal = statsObj.asText
         if (statsType == NUM_RECORDS) {
-          fileStats += (statsType -> statsObj.asText.toLong)
+          checkValueFormat(statsType, statsVal, new LongType)
+          fileStats += (statsType -> statsVal)
         }
       } else {
         // This is an column-specific stats, like MIN_VALUE and MAX_VALUE, iterator through the
@@ -142,15 +149,18 @@ private[internal] object DataSkippingUtils {
           val columnName = dataColumn.getName
           val statsVal = statsObj.get(columnName)
           if (statsVal != null) {
+            val statsValStr = statsVal.asText
             val statsName = statsType + "." + dataColumn.getName
             statsType match {
               case MIN | MAX =>
-                // Check the stats type for MIN and MAX, as we only accepting the LongType for now.
-                if (dataColumn.getDataType.isInstanceOf[LongType]) {
-                  columnStats += (statsName -> statsVal.asText.toLong)
+                // Check the stats type for MIN and MAX.
+                if (isValidType(dataColumn.getDataType)) {
+                  checkValueFormat(statsType, statsValStr, dataColumn.getDataType)
+                  columnStats += (statsName -> statsValStr)
                 }
               case NULL_COUNT =>
-                columnStats += (statsName -> statsVal.asText.toLong)
+                checkValueFormat(statsType, statsValStr, new LongType)
+                columnStats += (statsName -> statsValStr)
               case _ =>
             }
           }
@@ -185,13 +195,15 @@ private[internal] object DataSkippingUtils {
       case Some(eq: EqualTo) => (eq.getLeft, eq.getRight) match {
         case (e1: Column, e2: Literal) =>
           val columnPath = e1.name
-          if (!(dataSchema.contains(columnPath) &&
-            dataSchema.get(columnPath).getDataType.isInstanceOf[LongType])) {
-              // Only accepting the LongType column for now.
+          if (!dataSchema.contains(columnPath)) {
               return None
           }
-          val minColumn = statsColumnBuilder(MIN, columnPath, new LongType)
-          val maxColumn = statsColumnBuilder(MAX, columnPath, new LongType)
+          val dataType = dataSchema.get(columnPath).getDataType
+          if (!isValidType(dataType)) {
+            return None
+          }
+          val minColumn = statsColumnBuilder(MIN, columnPath, dataType)
+          val maxColumn = statsColumnBuilder(MAX, columnPath, dataType)
 
           Some(new And(
               new LessThanOrEqual(minColumn, e2),
@@ -210,4 +222,24 @@ private[internal] object DataSkippingUtils {
       // TODO: support full types of Expression
       case _ => None
     }
+
+  /**
+   * Return true if the give data type is supported in column stats filter, otherwise return false.
+   */
+  def isValidType(dataType: DataType): Boolean = supportedDataType.contains(dataType)
+
+  /**
+   * Checking stats value format with the given data type. Will raise wrong data format exception if
+   * stats value is in wrong format. The exception should be handled by the caller.
+   */
+  def checkValueFormat(fieldName: String, v: String, dataType: DataType): Unit = dataType match {
+    case _: BooleanType => v.toBoolean
+    case _: ByteType => v.toByte
+    case _: DoubleType => v.toDouble
+    case _: FloatType => v.toFloat
+    case _: IntegerType => v.toInt
+    case _: LongType => v.toLong
+    case _: ShortType => v.toShort
+    case _ => throw DeltaErrors.fieldTypeMismatch(fieldName, dataType, "Unknown Type")
+  }
 }

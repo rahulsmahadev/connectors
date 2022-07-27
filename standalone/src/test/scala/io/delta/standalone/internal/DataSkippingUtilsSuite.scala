@@ -81,8 +81,8 @@ class DataSkippingUtilsSuite extends FunSuite {
      */
     def testParseColumnStats(
         statsString: String,
-        expectedFileStats: Map[String, Long],
-        expectedColumnStats: Map[String, Long],
+        expectedFileStats: Map[String, String],
+        expectedColumnStats: Map[String, String],
         isNestedSchema: Boolean = false): Unit = {
       val s = if (isNestedSchema) nestedSchema else schema
       val (fileStats, columnStats) = DataSkippingUtils.parseColumnStats(
@@ -91,52 +91,52 @@ class DataSkippingUtilsSuite extends FunSuite {
       assert(columnStats == expectedColumnStats)
     }
 
-    var expectedFileStats = Map("numRecords" -> 3L)
-    var expectedColumnStats = Map("minValues.col2" -> 2L, "minValues.col1" -> 1L)
-    // Though `stringCol` is not LongType, its `nullCount` stats will be documented
+    var expectedFileStats = Map("numRecords" -> "3")
+    var expectedColumnStats = Map("minValues.col2" -> "2", "minValues.col1" -> "1")
+    // Though StringType is not supported, its `nullCount` stats will be documented
     // while `minValues` and `maxValues` won't be.
     testParseColumnStats(columnStats, expectedFileStats, expectedColumnStats)
 
     // parse column stats: ignore nested column
-    expectedFileStats = Map[String, Long]()
-    expectedColumnStats = Map[String, Long]()
+    expectedFileStats = Map[String, String]()
+    expectedColumnStats = Map[String, String]()
     testParseColumnStats(
       nestedColStats, expectedFileStats, expectedColumnStats, isNestedSchema = true)
 
     // parse column stats: wrong JSON format
-    expectedFileStats = Map[String, Long]()
-    expectedColumnStats = Map[String, Long]()
+    expectedFileStats = Map[String, String]()
+    expectedColumnStats = Map[String, String]()
     val e = intercept[JsonEOFException] {
       testParseColumnStats(statsString = brokenStats, expectedFileStats, expectedColumnStats)
     }
     assert(e.getMessage.contains("Unexpected end-of-input in field name"))
 
     // parse column stats: missing stats from schema
-    expectedFileStats = Map[String, Long](s"$NUM_RECORDS" -> 2)
-    expectedColumnStats = Map[String, Long](s"$MIN.col1" -> 1)
+    expectedFileStats = Map[String, String](s"$NUM_RECORDS" -> "2")
+    expectedColumnStats = Map[String, String](s"$MIN.col1" -> "1")
     testParseColumnStats(missingColumnStats, expectedFileStats, expectedColumnStats)
 
     // parse column stats: duplicated stats name
     val duplicatedStats = s"""{"$MIN":{"col1":1,"col1":2},"numRecords":3}"""
-    expectedFileStats = Map[String, Long](s"$NUM_RECORDS" -> 3)
-    expectedColumnStats = Map[String, Long](s"$MIN.col1" -> 2)
+    expectedFileStats = Map[String, String](s"$NUM_RECORDS" -> "3")
+    expectedColumnStats = Map[String, String](s"$MIN.col1" -> "2")
     testParseColumnStats(duplicatedStats, expectedFileStats, expectedColumnStats)
 
     // parse column stats: conflict stats type
     // Error will not raise because `minValues` will not be stored in the file-specific stats map.
     val conflictStatsType = s"""{"$MIN":{"col1":1,"col2":2},"$MIN":3}"""
-    testParseColumnStats(conflictStatsType, Map[String, Long](), Map[String, Long]())
+    testParseColumnStats(conflictStatsType, Map[String, String](), Map[String, String]())
 
     // parse column stats: wrong data type for a known stats type
     // NUM_RECORDS should be LongType but is StringType here. The method raise error and should be
     // handle by caller.
     val wrongStatsDataType = s"""{"$MIN":{"col1":1,"col2":2},"$NUM_RECORDS":"a"}"""
     testException[NumberFormatException](
-      testParseColumnStats(wrongStatsDataType, Map[String, Long](), Map[String, Long]()),
+      testParseColumnStats(wrongStatsDataType, Map[String, String](), Map[String, String]()),
       "For input string: ")
   }
 
-  test("unit test: filter construction") {
+  test("unit test: column stats filter construction") {
     /**
      * @param inputExpr          The query predicate as input.
      * @param expectedOutputExpr The expected column stats filter as output.
@@ -207,26 +207,28 @@ class DataSkippingUtilsSuite extends FunSuite {
      * @param fileStatsValue   The value of file-specific stats.
      * @param columnStatsValue The value of column-specific stats.
      * @param name             The field name.
-     * @return
+     * @return The column stats row record for testing
      */
     def buildColumnStatsRowRecord(
         dataType: DataType,
         nullable: Boolean,
-        fileStatsValue: Long,
-        columnStatsValue: Long,
+        fileStatsValue: String,
+        columnStatsValue: String,
         name: String = "test"): ColumnStatsRowRecord = {
+      val statsColumn = new StructType(Array(new StructField(name, dataType, nullable)))
+      val dataSchema = DataSkippingUtils.buildStatsSchema(statsColumn)
       new ColumnStatsRowRecord(
-        new StructType(Array(new StructField(name, dataType, nullable))),
-        Map(name -> fileStatsValue), Map(name -> columnStatsValue))
+        dataSchema,
+        Map(), Map(s"$MIN.$name" -> columnStatsValue))
     }
 
     val testStatsRowRecord = buildColumnStatsRowRecord(
-      new LongType(), nullable = true, fileStatsValue = 10L, columnStatsValue = 5L)
-    assert(buildColumnStatsRowRecord(new LongType(), nullable = true, fileStatsValue = 5L,
-      columnStatsValue = 10L).isNullAt("test"))
+      new LongType(), nullable = true, fileStatsValue = "10", columnStatsValue = "5")
+    assert(buildColumnStatsRowRecord(new LongType(), nullable = true, fileStatsValue = "5",
+      columnStatsValue = "10").isNullAt("test"))
     // non-nullable field
-    assert(buildColumnStatsRowRecord(new LongType(), nullable = false, fileStatsValue = 5L,
-      columnStatsValue = 5L).isNullAt("test"))
+    assert(buildColumnStatsRowRecord(new LongType(), nullable = false, fileStatsValue = "5",
+      columnStatsValue = "5").isNullAt("test"))
 
     assert(testStatsRowRecord.isNullAt("test"))
 
@@ -240,19 +242,24 @@ class DataSkippingUtilsSuite extends FunSuite {
     // primitive types can't be null
     // for primitive type T: (DataType, getter: ColumnStatsRowRecord => T, value: String, value: T)
     val primTypes = Seq(
-      (new IntegerType, (x: ColumnStatsRowRecord) => x.getInt("test"), 0L, 0),
-      (new ByteType, (x: ColumnStatsRowRecord) => x.getByte("test"), 0L, 0.toByte),
-      (new ShortType, (x: ColumnStatsRowRecord) => x.getShort("test"), 0L, 0.toShort),
-      (new BooleanType, (x: ColumnStatsRowRecord) => x.getBoolean("test"), 0L, true),
-      (new FloatType, (x: ColumnStatsRowRecord) => x.getFloat("test"), 0L, 0.0F),
-      (new DoubleType, (x: ColumnStatsRowRecord) => x.getDouble("test"), 0L, 0.0))
+      (new IntegerType, (x: ColumnStatsRowRecord, n: String) => x.getInt(n), "0", 0,
+        "testInt"),
+      (new LongType, (x: ColumnStatsRowRecord, n: String) => x.getInt(n), "0", 0L,
+        "testLong"),
+      (new ByteType, (x: ColumnStatsRowRecord, n: String) => x.getByte(n), "0", 0.toByte,
+        "testByte"),
+      (new ShortType, (x: ColumnStatsRowRecord, n: String) => x.getShort(n), "0", 0.toShort,
+        "testShort"),
+      (new BooleanType, (x: ColumnStatsRowRecord, n: String) => x.getBoolean(n), "true", true,
+        "testBoolean"),
+      (new FloatType, (x: ColumnStatsRowRecord, n: String) => x.getFloat(n), "0", 0.0F,
+        "testFloat"),
+      (new DoubleType, (x: ColumnStatsRowRecord, n: String) => x.getDouble(n), "0", 0.0,
+        "testDouble"))
 
     primTypes.foreach {
-      case (dataType: DataType, f: (ColumnStatsRowRecord => Any), l: Long, _) =>
-        // reserves a dummy parameter for adding data type support later.
-        testException[UnsupportedOperationException](
-          f(buildColumnStatsRowRecord(dataType, nullable = true, l, l)),
-          s"${dataType.getTypeName} is not a supported column stats type.")
+      case (d: DataType, f: ((ColumnStatsRowRecord, String) => Any), s: String, v, n: String) =>
+        assert(f(buildColumnStatsRowRecord(d, nullable = true, s, s, n), s"$MIN.$n") == v)
     }
 
     val nonPrimTypes = Seq(
@@ -265,7 +272,7 @@ class DataSkippingUtilsSuite extends FunSuite {
     nonPrimTypes.foreach {
       case (dataType: DataType, f: (ColumnStatsRowRecord => Any), _) =>
         testException[UnsupportedOperationException](
-          f(buildColumnStatsRowRecord(dataType, nullable = true, 0L, 0L)),
+          f(buildColumnStatsRowRecord(dataType, nullable = true, "0", "0")),
           s"${dataType.getTypeName} is not a supported column stats type.")
     }
 

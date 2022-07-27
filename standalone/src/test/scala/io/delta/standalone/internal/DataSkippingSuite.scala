@@ -20,10 +20,12 @@ import org.apache.hadoop.conf.Configuration
 import org.scalatest.FunSuite
 
 import io.delta.standalone.{DeltaLog, Operation}
-import io.delta.standalone.expressions.{And, EqualTo, Expression, LessThanOrEqual, Literal}
-import io.delta.standalone.types.{LongType, StringType, StructField, StructType}
+import io.delta.standalone.expressions.{And, Column, EqualTo, Expression, LessThanOrEqual, Literal}
+import io.delta.standalone.types.{BinaryType, BooleanType, ByteType, DateType, DoubleType, FloatType, IntegerType, LongType, ShortType, StringType, StructField, StructType, TimestampType}
 
 import io.delta.standalone.internal.actions.{Action, AddFile, Metadata}
+import io.delta.standalone.internal.data.ColumnStatsRowRecord
+import io.delta.standalone.internal.util.DataSkippingUtils
 import io.delta.standalone.internal.util.DataSkippingUtils.{MAX, MIN, NULL_COUNT, NUM_RECORDS}
 import io.delta.standalone.internal.util.TestUtils._
 
@@ -397,5 +399,101 @@ class DataSkippingSuite extends FunSuite {
       }
       assert(resFiles == matchedFilePaths)
     }
+  }
+
+  test("integration test: data type support") {
+    val fullTypeSchema = new StructType(Array(
+      new StructField("binaryCol", new BinaryType, true),
+      new StructField("booleanCol", new BooleanType, true),
+      new StructField("byteCol", new ByteType, true),
+      new StructField("dateCol", new DateType, true),
+      new StructField("doubleCol", new DoubleType, true),
+      new StructField("floatCol", new FloatType, true),
+      new StructField("integerCol", new IntegerType, true),
+      new StructField("longCol", new LongType, true),
+      new StructField("shortCol", new ShortType, true),
+      new StructField("stringCol", new StringType, true),
+      new StructField("timestampCol", new TimestampType, true)
+    ))
+
+    val fullTypeColumnStats = Map[String, String](
+      "binaryCol" -> "ab\"d",
+      "booleanCol" -> "false",
+      "byteCol" -> "121",
+      "dateCol" -> "2022-07-17",
+      "doubleCol" -> "11.1",
+      "floatCol" -> "12.2",
+      "integerCol" -> "123456",
+      "longCol" -> "4400000000",
+      "shortCol" -> "32100",
+      "stringCol" -> "ab\"d",
+      "timestampCol" -> "2022-05-16 09:00:00"
+    ).map { case (k, v) => s"$MAX.$k" -> v }
+
+    val rowRecord = new ColumnStatsRowRecord(
+      DataSkippingUtils.buildStatsSchema(fullTypeSchema),
+      Map(),
+      fullTypeColumnStats)
+
+    def evalDataTypeTest(expr: Expression): Boolean = {
+      val result = expr.eval(rowRecord)
+      assert(result != null)
+      assert(result.isInstanceOf[Boolean])
+      result.asInstanceOf[Boolean]
+    }
+
+    /**
+     * Test expression evaluation for all supported data types with given expression.
+     *
+     * @param hits   The expression evaluated as true.
+     * @param misses The expression evaluated as false.
+     */
+    def columnStatsDataTypeTest(
+        hits: Seq[Expression],
+        misses: Seq[Expression]): Unit = {
+      // For each date type, it will test the stats value in `fileStatsMap` first, then test in
+      // `columnStatsMap`.
+      hits.foreach { hit =>
+        assert(evalDataTypeTest(hit))
+      }
+      misses.foreach { miss =>
+        assert(!evalDataTypeTest(miss))
+      }
+    }
+
+    val hits = Seq(
+      new EqualTo(new Column(s"$MAX.booleanCol", new BooleanType),
+        Literal.of(false)),
+      new EqualTo(new Column(s"$MAX.byteCol", new ByteType),
+        Literal.of(121.toByte)),
+      new EqualTo(new Column(s"$MAX.doubleCol", new DoubleType),
+        Literal.of(11.1D)),
+      new EqualTo(new Column(s"$MAX.floatCol", new FloatType),
+        Literal.of(12.2F)),
+      new EqualTo(new Column(s"$MAX.integerCol", new IntegerType),
+        Literal.of(123456)),
+      new EqualTo(new Column(s"$MAX.longCol", new LongType),
+        Literal.of(4400000000L)),
+      new EqualTo(new Column(s"$MAX.shortCol", new ShortType),
+        Literal.of(32100.toShort))
+    )
+
+    val misses = Seq(
+      new EqualTo(new Column(s"$MAX.booleanCol", new BooleanType),
+        Literal.of(true)),
+      new EqualTo(new Column(s"$MAX.byteCol", new ByteType),
+        Literal.of(-120.toByte)),
+      new EqualTo(new Column(s"$MAX.doubleCol", new DoubleType),
+        Literal.of(11.0D)),
+      new EqualTo(new Column(s"$MAX.floatCol", new FloatType),
+        Literal.of(12.0F)),
+      new EqualTo(new Column(s"$MAX.integerCol", new IntegerType),
+        Literal.of(654321)),
+      new EqualTo(new Column(s"$MAX.longCol", new LongType),
+        Literal.of(3300000000L)),
+      new EqualTo(new Column(s"$MAX.shortCol", new ShortType),
+        Literal.of(32000.toShort))
+    )
+    columnStatsDataTypeTest(hits, misses)
   }
 }
