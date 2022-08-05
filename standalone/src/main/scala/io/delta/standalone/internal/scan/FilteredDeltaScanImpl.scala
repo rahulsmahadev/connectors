@@ -20,11 +20,14 @@ import java.util.Optional
 
 import scala.util.control.NonFatal
 
+import org.apache.hadoop.conf.Configuration
+
 import io.delta.standalone.expressions.Expression
 import io.delta.standalone.types.StructType
 
 import io.delta.standalone.internal.actions.{AddFile, MemoryOptimizedLogReplay}
 import io.delta.standalone.internal.data.{ColumnStatsRowRecord, PartitionRowRecord}
+import io.delta.standalone.internal.sources.StandaloneHadoopConf
 import io.delta.standalone.internal.util.{DataSkippingUtils, PartitionUtils}
 
 /**
@@ -37,12 +40,17 @@ final private[internal] class FilteredDeltaScanImpl(
     replay: MemoryOptimizedLogReplay,
     expr: Expression,
     partitionSchema: StructType,
-    dataSchema: StructType) extends DeltaScanImpl(replay) {
+    dataSchema: StructType,
+    hadoopConf: Configuration) extends DeltaScanImpl(replay) {
 
   private val partitionColumns = partitionSchema.getFieldNames.toSeq
 
   private val (metadataConjunction, dataConjunction) =
     PartitionUtils.splitMetadataAndDataPredicates(expr, partitionColumns)
+
+  /** Feature flag of stats based file pruning. */
+  private val statsSkippingEnabled = hadoopConf
+    .getBoolean(StandaloneHadoopConf.STATS_SKIPPING_KEY, true)
 
   /**
    * If column stats filter is evaluated as true, it means some row in this file may meet the query
@@ -71,10 +79,7 @@ final private[internal] class FilteredDeltaScanImpl(
       true
     }
 
-    if (partitionFilterResult && columnStatsFilter.isDefined) {
-      // Evaluate the column stats filter when partition filter passed and column stats filter is
-      // not empty.
-
+    if (statsSkippingEnabled && partitionFilterResult && columnStatsFilter.isDefined) {
       // Get stats value from each AddFile.
       val (fileStats, columnStats) = try {
         DataSkippingUtils.parseColumnStats(dataSchema, addFile.stats)

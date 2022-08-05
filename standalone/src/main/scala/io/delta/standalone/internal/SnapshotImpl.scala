@@ -35,6 +35,7 @@ import io.delta.standalone.internal.data.CloseableParquetDataIterator
 import io.delta.standalone.internal.exception.DeltaErrors
 import io.delta.standalone.internal.logging.Logging
 import io.delta.standalone.internal.scan.{DeltaScanImpl, FilteredDeltaScanImpl}
+import io.delta.standalone.internal.sources.StandaloneHadoopConf
 import io.delta.standalone.internal.util.{ConversionUtils, FileNames, JsonUtils}
 
 /**
@@ -69,7 +70,8 @@ private[internal] class SnapshotImpl(
       memoryOptimizedLogReplay,
       predicate,
       metadataScala.partitionSchema,
-      metadataScala.dataSchema)
+      metadataScala.dataSchema,
+      hadoopConf)
 
   override def getAllFiles: java.util.List[AddFileJ] = activeFilesJ
 
@@ -105,7 +107,8 @@ private[internal] class SnapshotImpl(
       memoryOptimizedLogReplay,
       predicate,
       metadataScala.partitionSchema,
-      metadataScala.dataSchema)
+      metadataScala.dataSchema,
+      hadoopConf)
 
   def tombstones: Seq[RemoveFileJ] = state.tombstones.toSeq.map(ConversionUtils.convertRemoveFile)
   def setTransactions: Seq[SetTransactionJ] =
@@ -311,5 +314,6 @@ private class InitialSnapshotImpl(
       memoryOptimizedLogReplay,
       predicate,
       metadataScala.partitionSchema,
-      metadataScala.dataSchema)
+      metadataScala.dataSchema,
+      hadoopConf)
 }

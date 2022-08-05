@@ -29,4 +29,10 @@ private[internal] object StandaloneHadoopConf {
 
   /** Key for the class name of the desired [[LogStore]] implementation to be used. */
   val LOG_STORE_CLASS_KEY = "delta.logStore.class"
+
+  /**
+   * If enabled, per-column statistics will be used to perform file pruning (aka data skipping) in
+   * `DeltaScan::getFiles`. By default, this feature is enabled. Set to `false` to disable.
+   */
+  val STATS_SKIPPING_KEY = "io.delta.standalone.statsSkipping.enabled"
 }

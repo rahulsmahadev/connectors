@@ -25,6 +25,7 @@ import io.delta.standalone.types.{BinaryType, BooleanType, ByteType, DateType, D
 
 import io.delta.standalone.internal.actions.{Action, AddFile, Metadata}
 import io.delta.standalone.internal.data.ColumnStatsRowRecord
+import io.delta.standalone.internal.sources.StandaloneHadoopConf
 import io.delta.standalone.internal.util.DataSkippingUtils
 import io.delta.standalone.internal.util.DataSkippingUtils.{MAX, MIN, NULL_COUNT, NUM_RECORDS}
 import io.delta.standalone.internal.util.TestUtils._
@@ -94,9 +95,12 @@ class DataSkippingSuite extends FunSuite {
     AddFile(i.toString, partitionValues, 1L, 1L, dataChange = true, stats = wrappedColumnStats)
   }
 
-  def withDeltaLog(actions: Seq[Action], m: Option[Metadata] = None) (f: DeltaLog => Unit): Unit = {
+  def withDeltaLog(
+      actions: Seq[Action],
+      m: Option[Metadata] = None,
+      conf: Option[Configuration] = None) (f: DeltaLog => Unit): Unit = {
     withTempDir { dir =>
-      val log = DeltaLog.forTable(new Configuration(), dir.getCanonicalPath)
+      val log = DeltaLog.forTable(conf.getOrElse(new Configuration()), dir.getCanonicalPath)
       log.startTransaction().commit(m.getOrElse(metadata) :: Nil, op, "engineInfo")
       log.startTransaction().commit(actions, op, "engineInfo")
       f(log)
@@ -106,8 +110,9 @@ class DataSkippingSuite extends FunSuite {
   def filePruningTest(
       expr: Expression,
       matchedFilePaths: Seq[String],
-      files: Seq[AddFile]): Unit = {
-    withDeltaLog(files) { log =>
+      files: Seq[AddFile],
+      conf: Option[Configuration] = None): Unit = {
+    withDeltaLog(files, conf = conf) { log =>
       val scan = log.update().scan(expr)
       val iter = scan.getFiles
       var resFiles: Seq[String] = Seq()
@@ -133,16 +138,17 @@ class DataSkippingSuite extends FunSuite {
       expr: Expression,
       matchedFilePaths: Seq[String],
       customStats: Option[Int => String] = None,
-      strColHasValue: Boolean = false): Unit = {
+      strColHasValue: Boolean = false,
+      conf: Option[Configuration] = None): Unit = {
     val logFiles = buildFiles(customStats, strColHasValue)
 
     // Case 1: Test with only column stats predicates.
-    filePruningTest(expr, matchedFilePaths, logFiles)
+    filePruningTest(expr, matchedFilePaths, logFiles, conf)
 
     // Case 2: Test with column stats predicates and partition filter `partitionCol <= 10`.
     val compositeExpr = new And(expr,
       new LessThanOrEqual(schema.column("partitionCol"), Literal.of(10L)))
-    filePruningTest(compositeExpr, matchedFilePaths.filter(_.toLong <= 10L), logFiles)
+    filePruningTest(compositeExpr, matchedFilePaths.filter(_.toLong <= 10L), logFiles, conf)
   }
 
   /**
@@ -178,7 +184,7 @@ class DataSkippingSuite extends FunSuite {
   }
 
   /**
-   * Query: (col1 == 1 && col2 == 1) (1 <= i <= 20)
+   * Query filter: (col1 == 1 && col2 == 1) (1 <= i <= 20)
    * Column stats filter: (MIN.col1 <= 1 && MAX.col1 >= 1 && MIN.col2 <= 1 && MAX.col2 >= 1)
    */
   test("integration test: column stats filter on 2 non-partition column") {
@@ -198,7 +204,7 @@ class DataSkippingSuite extends FunSuite {
   }
 
   /**
-   * Filter: (col2 == 1 && col2 == 1) (1 <= i <= 20)
+   * Query filter: (col2 == 1 && col2 == 1) (1 <= i <= 20)
    * Column stats filter: (MIN.col2 <= 1 && MAX.col2 >= 1 && MIN.col2 <= 1 && MAX.col2 >= 1)
    */
   test("integration test: multiple filter on 1 non-partition column - duplicate") {
@@ -216,7 +222,7 @@ class DataSkippingSuite extends FunSuite {
   }
 
   /**
-   * Filter: (col2 == 1 AND col2 == 2) (1 <= i <= 20)
+   * Query filter: (col2 == 1 AND col2 == 2) (1 <= i <= 20)
    * Column stats filter: (MIN.col2 <= 1 && MAX.col2 >= 1 && MIN.col2 <= 2 && MAX.col2 >= 2)
    */
   test("integration test: multiple filter on 1 non-partition column - conflict") {
@@ -236,7 +242,7 @@ class DataSkippingSuite extends FunSuite {
   }
 
   /**
-   * Filter: (col1 == 2)
+   * Query filter: (col1 == 2)
    * Column stats filter: (MIN.col1 <= 2 && MAX.col1 >= 2)
    * Output: Return all files. (Column stats filter not work)
    * Reason: Because MIN.col2 and MAX.col2 is used in column stats predicate while not exists in
@@ -252,7 +258,7 @@ class DataSkippingSuite extends FunSuite {
   }
 
   /**
-   * Filter: (col1 == 1 AND col2 == 1)
+   * Query filter: (col1 == 1 AND col2 == 1)
    * Column stats filter: (MIN.col1 <= 1 && MAX.col1 >= 1 && MIN.col2 <= 1 && MAX.col2 >= 1)
    * Output: All files. (Column stats filter not work)
    * Reason: Because MIN.col2 and MAX.col2 is used in column stats predicate while not exists in
@@ -285,7 +291,7 @@ class DataSkippingSuite extends FunSuite {
   }
 
   /**
-   * Filter: (col1 == 1)
+   * Query filter: (col1 == 1)
    * Column stats filter: (MIN.col1 <= 1 && MAX.col1 >= 1)
    * Output: All files. (Column stats filter not work)
    * Reason: Because stats string is empty, we can't evaluate column stats predicate and will skip
@@ -298,7 +304,7 @@ class DataSkippingSuite extends FunSuite {
   }
 
   /**
-   * Filter: (col2 == 1)
+   * Query filter: (col2 == 1)
    * Column stats filter: (MIN.col2 <= 1 && MAX.col2 >= 1)
    * Output: All files. (Column stats filter not work)
    * Reason: Because stats string is broken, we can't evaluate column stats predicate and will skip
@@ -319,7 +325,7 @@ class DataSkippingSuite extends FunSuite {
   }
 
   /**
-   * Filter: (stringCol == "a")
+   * Query filter: (stringCol == "a")
    * Column stats filter: None
    * Output: All files.
    * Reason: Because string type is currently unsupported, we can't evaluate column stats
@@ -332,7 +338,7 @@ class DataSkippingSuite extends FunSuite {
   }
 
   /**
-   * Filter: (col1 <= 1)
+   * Query filter: (col1 <= 1)
    * Column stats filter: None
    * Output: All files.
    * Reason: Because LessThanOrEqual is currently unsupported in building column stats predicate,
@@ -345,7 +351,7 @@ class DataSkippingSuite extends FunSuite {
   }
 
   /**
-   * Filter: (normalCol == 5)
+   * Query filter: (normalCol == 5)
    * Column stats filter: empty
    * Output: All files.
    * Reason: The nested table will not filtered by column stats predicate, because they are not
@@ -495,5 +501,38 @@ class DataSkippingSuite extends FunSuite {
         Literal.of(32000.toShort))
     )
     columnStatsDataTypeTest(hits, misses)
+  }
+
+  test("integration test: feature flag") {
+    // Query filter: (col1 == 1 AND col2 == 1)
+    val expr = new And(
+      new EqualTo(schema.column("col1"), Literal.of(1L)),
+      new EqualTo(schema.column("col2"), Literal.of(1L)))
+
+    // Column stats filter: (MIN.col1 <= 1 && MAX.col1 >= 1 && MIN.col2 <= 1 && MAX.col2 >= 1)
+    val expectedResultWithStatsSkipping = (1 to 20)
+      .filter { i =>
+        col1Min(i) <= 1 &&
+          col1Max(i) >= 1 &&
+          col2Min(i) <= 1 &&
+          col2Max(i) >= 1
+      }
+      .map(_.toString)
+
+    // Stats skipping is enabled by default.
+    // Testing with stats filter.
+    columnStatsBasedFilePruningTest(expr, expectedResultWithStatsSkipping)
+
+    // Disable stats skipping.
+    val disableConf = new Configuration()
+    disableConf.setBoolean(StandaloneHadoopConf.STATS_SKIPPING_KEY, false)
+
+    val expectedResultWithoutStatsSkipping = (1 to 20).map(_.toString)
+
+    // Testing without stats filter, so it will return all the files.
+    columnStatsBasedFilePruningTest(
+      expr,
+      expectedResultWithoutStatsSkipping,
+      conf = Some(disableConf))
   }
 }
