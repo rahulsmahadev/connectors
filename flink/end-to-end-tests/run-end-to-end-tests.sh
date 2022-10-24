@@ -47,32 +47,55 @@ export_fat_jar_path() {
 
 create_terraform_infrastructure() {
   echo "Creating terraform infrastructure."
-  # FIXME terraform init, validate and apply
-  echo "It will be implemented in the PR-02-A"
+  terraform -chdir="$TERRAFORM_DIR" init &&
+    terraform -chdir="$TERRAFORM_DIR" validate &&
+    terraform -chdir="$TERRAFORM_DIR" apply -auto-approve
 }
 
 destroy_terraform_infrastructure() {
   echo "Destroying terraform infrastructure."
-  # FIXME terraform destroy
-  echo "It will be implemented in the PR-02-A"
+  local targets
+  targets="-target=module.networking -target=module.flink-session-cluster"
+  if [ "$PRESERVE_S3_DATA" != "yes" ]; then
+    targets="$targets -target=module.storage"
+  fi
+  terraform -chdir="$TERRAFORM_DIR" destroy -auto-approve $targets
 }
 
 create_kubernetes_infrastructure() {
   echo "Creating kubernetes infrastructure."
-  # FIXME: installing cert-manager and kubernetes-flink-operator, apply kubernetes configuration
-  echo "It will be implemented in the PR-02-A"
+  aws eks --region $AWS_REGION update-kubeconfig --name $EKS_CLUSTER_NAME
+  kubectl create -f https://github.com/jetstack/cert-manager/releases/download/v1.8.2/cert-manager.yaml
+
+  # First wait until kubernetes pod is created, and then until it is ready.
+  until kubectl -n cert-manager get pods -o go-template='{{.items | len}}' | grep -qxF 3; do
+    echo "Wait for pods (cert-manager)"
+    sleep 1
+  done
+  kubectl wait -n cert-manager --for=condition=ready pods --all --timeout=300s
+
+  helm repo add flink-operator-repo https://downloads.apache.org/flink/flink-kubernetes-operator-1.1.0/
+  helm install flink-kubernetes-operator flink-operator-repo/flink-kubernetes-operator --replace
+
+  until kubectl -n default get pods -l app.kubernetes.io/name=flink-kubernetes-operator -o go-template='{{.items | len}}' | grep -qxF 1; do
+    echo "Wait for pod (flink-kubernetes-operator)"
+    sleep 1
+  done
+  kubectl wait -n default --for=condition=ready pods --all -l app.kubernetes.io/name=flink-kubernetes-operator
+
+  envsubst <"$KUBERNETES_DIR"/kubernetes.yaml | kubectl apply -f -
 }
 
 kubernetes_cleanup() {
   echo "Kubernetes cleanup."
-  # FIXME: uninstall flink-kubernetes-operator, close port-forward, unset kubernetes context
-  echo "It will be implemented in the PR-02-A"
+  kill $PORT_FORWARD_PID || echo "Port forward is not running"
+  helm uninstall flink-kubernetes-operator
+  kubectl config unset current-context
 }
 
 export_terraform_outputs() {
   export ACCOUNT_ID=$(terraform -chdir="$TERRAFORM_DIR" output account_id | tr -d '"')
   export AWS_REGION=$(terraform -chdir="$TERRAFORM_DIR" output region | tr -d '"')
-  export SERVICE_ACCOUNT_ROLE_NAME=$(terraform -chdir="$TERRAFORM_DIR" output service_account_role_name | tr -d '"')
   export EKS_CLUSTER_NAME=$(terraform -chdir="$TERRAFORM_DIR" output eks_cluster_name | tr -d '"')
   export TEST_DATA_BUCKET_NAME=$(terraform -chdir="$TERRAFORM_DIR" output test_data_bucket_name | tr -d '"')
   export CREDENTIALS_ACCESS_KEY_ID=$(terraform -chdir="$TERRAFORM_DIR" output access_key | tr -d '"' | base64)
@@ -81,13 +104,27 @@ export_terraform_outputs() {
 
 jobmanager_port_forward() {
   echo "Run port forward"
-  # FIXME: wait until pod is created & ready and then run port forward
-  echo "It will be implemented in the PR-02-A"
+  export JOBMANAGER_HOSTNAME=localhost
+  export JOBMANAGER_PORT=8081
+
+  until kubectl -n flink-tests get pod -l app=basic-session -o go-template='{{.items | len}}' | grep -qxF 1; do
+    echo "Wait for pod"
+    sleep 1
+  done
+  kubectl wait -n flink-tests --for=condition=ready pod -l app=basic-session --timeout=300s
+  (kubectl -n flink-tests port-forward svc/basic-session-rest 8081) &
+  export PORT_FORWARD_PID=$!
 }
 
 run_end_to_end_tests() {
   echo "Running tests..."
   cd "$PROJECT_ROOT_DIR" || exit
+
+  echo "S3_BUCKET_NAME=$TEST_DATA_BUCKET_NAME"
+  echo "PRESERVE_S3_DATA=$PRESERVE_S3_DATA"
+  echo "AWS_REGION=$AWS_REGION"
+  echo "JOBMANAGER_HOSTNAME=$JOBMANAGER_HOSTNAME"
+  echo "JOBMANAGER_PORT=$JOBMANAGER_PORT"
 
   build/sbt "++ $SCALA_VERSION" \
     flinkEndToEndTests/test

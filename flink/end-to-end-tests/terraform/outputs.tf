@@ -1,33 +1,29 @@
 output "eks_cluster_name" {
-  value = "It will be implemented in the PR-02-A"
+  value = module.flink_session_cluster.cluster_name
 }
 
 output "eks_cluster_endpoint" {
-  value = "It will be implemented in the PR-02-A"
+  value = module.flink_session_cluster.cluster_endpoint
 }
 
 output "account_id" {
-  value = "It will be implemented in the PR-02-A"
+  value = module.flink_session_cluster.account_id
 }
 
 output "region" {
-  value = "It will be implemented in the PR-02-A"
-}
-
-output "service_account_role_name" {
-  value = "It will be implemented in the PR-02-A"
+  value = module.flink_session_cluster.region
 }
 
 output "secret_key" {
-  value     = "It will be implemented in the PR-02-A"
+  value     = module.flink_session_cluster.secret_key
   sensitive = true
 }
 
 output "access_key" {
-  value     = "It will be implemented in the PR-02-A"
+  value     = module.flink_session_cluster.access_key
   sensitive = true
 }
 
 output "test_data_bucket_name" {
-  value = "It will be implemented in the PR-02-A"
+  value = module.storage.test_data_bucket_name
 }

@@ -1,1 +1,112 @@
-# It will be implemented in the PR-02-A
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: flink-tests
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  namespace: flink-tests
+  name: aws-credentials
+type: Opaque
+data:
+  id: ${CREDENTIALS_ACCESS_KEY_ID}
+  key: ${CREDENTIALS_SECRET_KEY}
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  namespace: flink-tests
+  name: flink-tests-sa
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: flink-tests
+  name: flink-tests
+rules:
+  - apiGroups: ["", "apps"]
+    resources: ["pods", "services", "configmaps", "persistentvolumeclaims", "deployments"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: flink-tests
+  name: flink-tests-role-binding
+roleRef:
+  kind: Role
+  name: flink-tests
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+- kind: ServiceAccount
+  name: flink-tests-sa
+  namespace: flink-tests
+
+---
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: basic-session
+  namespace: flink-tests
+spec:
+  image: flink:1.14.0
+  flinkVersion: v1_14
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "2"
+  serviceAccount: flink-tests-sa
+  jobManager:
+    replicas: 1
+    resource:
+      memory: "2048m"
+      cpu: 1
+    podTemplate:
+      spec:
+        containers:
+          # Do not change the main container name
+          - name: flink-main-container
+            env:
+              - name: ENABLE_BUILT_IN_PLUGINS
+                value: flink-s3-fs-hadoop-1.14.0.jar
+              - name: AWS_ACCESS_KEY_ID
+                valueFrom:
+                  secretKeyRef:
+                    name: aws-credentials
+                    key: id
+                    optional: false
+              - name: AWS_SECRET_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: aws-credentials
+                    key: key
+                    optional: false
+  taskManager:
+    replicas: 2
+    resource:
+      memory: "2048m"
+      cpu: 1
+    podTemplate:
+      spec:
+        containers:
+          # Do not change the main container name
+          - name: flink-main-container
+            env:
+              - name: ENABLE_BUILT_IN_PLUGINS
+                value: flink-s3-fs-hadoop-1.14.0.jar
+              - name: AWS_ACCESS_KEY_ID
+                valueFrom:
+                  secretKeyRef:
+                    name: aws-credentials
+                    key: id
+                    optional: false
+              - name: AWS_SECRET_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: aws-credentials
+                    key: key
+                    optional: false
