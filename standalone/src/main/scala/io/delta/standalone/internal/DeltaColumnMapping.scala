@@ -47,7 +47,7 @@ trait DeltaColumnMappingBase extends Logging {
   // This could be different from the column name in schema.
   val COLUMN_MAPPING_PHYSICAL_NAME_KEY = COLUMN_MAPPING_METADATA_PREFIX + "physicalName"
 
-  private val supportedModes: Set[DeltaColumnMappingMode] = Set(NoMapping, NameMapping)
+  private val supportedModes: Set[DeltaColumnMappingMode] = Set(NoMapping, NameMapping, IdMapping)
 
   /**
    * This list of internal columns (and only this list) is allowed to have missing
@@ -324,13 +324,14 @@ trait DeltaColumnMappingBase extends Logging {
   }
 
   /**
-   * The only allowed mode change is from NoMapping to NameMapping. Other changes
+   * The only allowed mode change is from NoMapping to NameMapping or IdMapping. Other changes
    * would require re-writing Parquet files and are not supported right now.
    */
   private def allowMappingModeChange(
       oldMode: DeltaColumnMappingMode, newMode: DeltaColumnMappingMode): Boolean = {
     if (oldMode == newMode) true
-    else oldMode == NoMapping && newMode == NameMapping
+    else (oldMode == NoMapping && newMode == NameMapping) ||
+      (oldMode == NoMapping && newMode == IdMapping)
   }
 
   private def satisfyColumnMappingProtocol(protocol: Protocol): Boolean =

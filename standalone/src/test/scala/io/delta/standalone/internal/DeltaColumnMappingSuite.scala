@@ -29,22 +29,22 @@ import io.delta.standalone.types.FieldMetadata.builder
 import io.delta.standalone.internal.DeltaColumnMapping._
 import io.delta.standalone.internal.actions.{Metadata, Protocol}
 import io.delta.standalone.internal.util.{ConversionUtils, SchemaMergingUtils}
-import io.delta.standalone.internal.util.SchemaMergingUtils.transformColumns
+import io.delta.standalone.internal.util.SchemaMergingUtils.{explodeNestedFieldNames, transformColumns}
 import io.delta.standalone.internal.util.TestUtils._
 
 
 class DeltaColumnMappingSuite extends FunSuite {
 
-  // Set the column mapping mode to 'id' or unknown and expect unsupported error
+  // Set the column mapping mode invalid mode and expect unsupported error
   test("unsupported column mapping mode") {
     val ex = intercept[ColumnMappingUnsupportedException] {
       verifyAndUpdateMetadataChange(
         oldProtocol = protocol(1, 2),
         oldMetadata = metadata(simpleSchema, Map.empty),
-        newMetadata = metadata(simpleSchema, withMode(Map.empty, "id")),
+        newMetadata = metadata(simpleSchema, withMode(Map.empty, "invalid")),
         isCreatingNewTable = false)
     }
-    assert(ex.getMessage contains "The column mapping mode `id` is not supported for this " +
+    assert(ex.getMessage contains "The column mapping mode `invalid` is not supported for this " +
         "Delta version. Please upgrade if you want to use this mode.")
   }
 
@@ -60,12 +60,13 @@ class DeltaColumnMappingSuite extends FunSuite {
         "Changing column mapping mode from name to none is not supported.")
   }
 
-  test("unsupported protocol version in existing table and no protocol upgrade in new metadata") {
+  testWithIdAndNameModes("unsupported protocol version in existing table and no " +
+      "protocol upgrade in new metadata") { mode =>
     val ex = intercept[ColumnMappingUnsupportedException] {
       verifyAndUpdateMetadataChange(
         oldProtocol = protocol(1, 2),
         oldMetadata = metadata(simpleSchema, Map.empty),
-        newMetadata = metadata(simpleSchema, withMode(Map.empty, "name")),
+        newMetadata = metadata(simpleSchema, withMode(Map.empty, mode)),
         isCreatingNewTable = false)
     }
     assert(ex.getMessage contains "Your current table protocol version does not support " +
@@ -76,69 +77,79 @@ class DeltaColumnMappingSuite extends FunSuite {
         "Your table's current Delta protocol version: Protocol(1,2)")
   }
 
-  test("unsupported protocol version in existing table and in new metadata") {
-    val ex = intercept[ColumnMappingUnsupportedException] {
-      verifyAndUpdateMetadataChange(
-        oldProtocol = protocol(1, 2),
-        oldMetadata = metadata(simpleSchema, Map.empty),
-        newMetadata = metadata(simpleSchema,
-                               withProtocol(withMode(Map.empty, "name"), readerV = 1, writerV = 5)),
-        isCreatingNewTable = false)
+  testWithIdAndNameModes("unsupported protocol version in existing table and in new metadata") {
+    mode => {
+      val ex = intercept[ColumnMappingUnsupportedException] {
+        verifyAndUpdateMetadataChange(
+          oldProtocol = protocol(1, 2),
+          oldMetadata = metadata(simpleSchema, Map.empty),
+          newMetadata = metadata(
+            simpleSchema, withProtocol(withMode(Map.empty, mode), readerV = 1, writerV = 5)),
+          isCreatingNewTable = false)
+      }
+      assert(ex.getMessage contains "Your current table protocol version does not support " +
+          "changing column mapping modes using delta.columnMapping.mode.")
+      assert(ex.getMessage contains
+                 "Required Delta protocol version for column mapping: Protocol(2,5)")
+      assert(ex.getMessage contains
+                 "Your table's current Delta protocol version: Protocol(1,2)")
     }
-    assert(ex.getMessage contains "Your current table protocol version does not support " +
-        "changing column mapping modes using delta.columnMapping.mode.")
-    assert(ex.getMessage contains
-        "Required Delta protocol version for column mapping: Protocol(2,5)")
-    assert(ex.getMessage contains
-        "Your table's current Delta protocol version: Protocol(1,2)")
   }
 
-  test("change mode=name on an existing table") {
+  testWithIdAndNameModes("change mode on an existing table") { mode =>
     val updatedMetadata = verifyAndUpdateMetadataChange(
       oldProtocol = protocol(1, 2),
       oldMetadata = metadata(simpleSchema, Map.empty),
       newMetadata = metadata(simpleSchema,
-                            withProtocol(withMode(Map.empty, "name"), readerV = 2, writerV = 5)),
+                            withProtocol(withMode(Map.empty, mode), readerV = 2, writerV = 5)),
       isCreatingNewTable = false)
+
+    assertMode(updatedMetadata, mode)
 
     val (actIds, actPhyNames) = extractIdsAndPhyNames(updatedMetadata.schema)
     assert(actIds === simpleSchemaExpIds)
     assert(actPhyNames === simpleSchemaExpPhyNames)
   }
 
-  test("change mode=name on an existing table - complex types") {
+  testWithIdAndNameModes("change mode on an existing table - complex types") { mode =>
     val updatedMetadata = verifyAndUpdateMetadataChange(
       oldProtocol = protocol(1, 2),
       oldMetadata = metadata(complexSchema, Map.empty),
       newMetadata = metadata(complexSchema,
-                             withProtocol(withMode(Map.empty, "name"), readerV = 2, writerV = 5)),
+                             withProtocol(withMode(Map.empty, mode), readerV = 2, writerV = 5)),
       isCreatingNewTable = false)
+
+    assertMode(updatedMetadata, mode)
 
     val (actIds, actPhyNames) = extractIdsAndPhyNames(updatedMetadata.schema)
     assert(actIds === complexSchemaExpIds)
     assert(actPhyNames === complexSchemaExpPhyNames)
   }
 
-  test("change mode=name on an new table") {
+  testWithIdAndNameModes("change mode on an new table") { mode =>
     val updatedMetadata = verifyAndUpdateMetadataChange(
       oldProtocol = protocol(1, 2),
       oldMetadata = metadata(simpleSchema, Map.empty),
       newMetadata = metadata(simpleSchema,
-                             withProtocol(withMode(Map.empty, "name"), readerV = 2, writerV = 5)),
+                             withProtocol(withMode(Map.empty, mode), readerV = 2, writerV = 5)),
       isCreatingNewTable = true)
+
+    assertMode(updatedMetadata, mode)
 
     val (actIds, actPhyNames) = extractIdsAndPhyNames(updatedMetadata.schema)
     assert(actIds === simpleSchemaExpIds)
     actPhyNames.values.foreach(assertUUIDColumnName(_))
   }
 
-  test("change mode=name on an new table - complex types") {
+  testWithIdAndNameModes("change mode=name on an new table - complex types") { mode =>
     val updatedMetadata = verifyAndUpdateMetadataChange(
       oldProtocol = protocol(1, 2),
       oldMetadata = metadata(complexSchema, Map.empty),
       newMetadata = metadata(complexSchema,
-                             withProtocol(withMode(Map.empty, "name"), readerV = 2, writerV = 5)),
+                             withProtocol(withMode(Map.empty, mode), readerV = 2, writerV = 5)),
       isCreatingNewTable = true)
+
+    assertMode(updatedMetadata, mode)
 
     val newSchema = updatedMetadata.schema
     val (actIds, actPhyNames) = extractIdsAndPhyNames(newSchema)
@@ -146,7 +157,7 @@ class DeltaColumnMappingSuite extends FunSuite {
     actPhyNames.values.foreach(assertUUIDColumnName(_))
   }
 
-  test("existing field metadata is preserved") {
+  testWithIdAndNameModes("existing field metadata is preserved") { mode =>
     val schema = struct(
       field("a", new IntegerType)
           .withNewMetadata(builder().putString("test", "testValue").build()),
@@ -157,8 +168,10 @@ class DeltaColumnMappingSuite extends FunSuite {
       oldProtocol = protocol(1, 2),
       oldMetadata = metadata(schema, Map.empty),
       newMetadata = metadata(schema,
-                             withProtocol(withMode(Map.empty, "name"), readerV = 2, writerV = 5)),
+                             withProtocol(withMode(Map.empty, mode), readerV = 2, writerV = 5)),
       isCreatingNewTable = true)
+
+    assertMode(updatedMetadata, mode)
 
     val (actIds, actPhyNames) = extractIdsAndPhyNames(updatedMetadata.schema)
     assert(actIds === simpleSchemaExpIds)
@@ -172,14 +185,15 @@ class DeltaColumnMappingSuite extends FunSuite {
     assert(updatedMetadata.schema.get("b").getMetadata.getEntries.size() == 3)
   }
 
-  test("verify column mapping metadata") {
+  testWithIdAndNameModes("verify column mapping metadata") { mode =>
     val updatedMetadata = verifyAndUpdateMetadataChange(
       oldProtocol = protocol(1, 2),
       oldMetadata = metadata(complexSchema, Map.empty),
       newMetadata = metadata(complexSchema,
-                             withProtocol(withMode(Map.empty, "name"), readerV = 2, writerV = 5)),
+                             withProtocol(withMode(Map.empty, mode), readerV = 2, writerV = 5)),
       isCreatingNewTable = false)
 
+    assertMode(updatedMetadata, mode)
     checkColumnIdAndPhysicalNameAssignments(updatedMetadata.schema, NameMapping)
   }
 
@@ -307,7 +321,7 @@ class DeltaColumnMappingSuite extends FunSuite {
     }
   }
 
-  test("Upgrade to column mapping mode 'name' on the table") {
+  testWithIdAndNameModes("Upgrade to column mapping mode on existing table") { mode =>
     withTempDir { dir =>
 
       // Create a table and initiate a transaction
@@ -325,20 +339,21 @@ class DeltaColumnMappingSuite extends FunSuite {
 
       // Upgrade the column mapping mode in the table
       txn = getTxnWithMaxFeatureSupport(dir.getCanonicalPath)
-      txn.updateMetadata(txn.metadata().withColumnMappingMode("name"))
+      txn.updateMetadata(txn.metadata().withColumnMappingMode(mode))
       txn.commit(Seq.empty, OP, "test")
 
       // Verify the columns have column mapping physical name and id assigned
       txn = getTxnWithMaxFeatureSupport(dir.getCanonicalPath)
-      val updatedSchema = txn.metadata().getSchema();
+      assertMode(txn.metadata(), mode)
 
+      val updatedSchema = txn.metadata().getSchema();
       val (actIds, actPhyNames) = extractIdsAndPhyNames(updatedSchema)
       assert(actIds === complexSchemaExpIds)
       assert(actPhyNames === complexSchemaExpPhyNames)
     }
   }
 
-  test("Create a new table with column mapping mode 'name'") {
+  testWithIdAndNameModes("Create a new table with column mapping mode") { mode =>
     withTempDir { dir =>
       // Create a table and initiate a transaction
       var txn = getTxnWithMaxFeatureSupport(dir.getCanonicalPath)
@@ -350,13 +365,14 @@ class DeltaColumnMappingSuite extends FunSuite {
         DeltaColumnMapping.MIN_WRITER_VERSION)
 
       // Update table with initial schema and column mapping mode
-      txn.updateMetadata(metadataJ(complexSchema, withMode(Map.empty, "name")))
+      txn.updateMetadata(metadataJ(complexSchema, withMode(Map.empty, mode)))
       txn.commit(Seq.empty, OP, "test")
 
       // Verify the columns have column mapping physical name and id assigned
       txn = getTxnWithMaxFeatureSupport(dir.getCanonicalPath)
-      val schema = txn.metadata().getSchema();
+      assertMode(txn.metadata(), mode)
 
+      val schema = txn.metadata().getSchema();
       val (actIds, actPhyNames) = extractIdsAndPhyNames(schema)
       assert(actIds === complexSchemaExpIds)
       actPhyNames.values.foreach(assertUUIDColumnName(_))
@@ -382,6 +398,14 @@ class DeltaColumnMappingSuite extends FunSuite {
         "The column mapping mode `invalid` is not supported for this Delta version. " +
           "Please upgrade if you want to use this mode.")
     }
+  }
+
+  private def testWithIdAndNameModes(testDescr: String)(testFunc: (String) => Any): Unit = {
+    Seq("name", "id").foreach(mode => {
+      test(testDescr + s": $mode") {
+        testFunc(mode)
+      }
+    })
   }
 
   private def getTxnWithMaxFeatureSupport(path: String): OptimisticTransaction = {
@@ -438,6 +462,17 @@ class DeltaColumnMappingSuite extends FunSuite {
   private def assertUUIDColumnName(physicalName: String): Unit =
     assert(physicalName.toString.startsWith("col-"),
       s"Physical UUID column name doesn't start with col-: $physicalName")
+
+  private def assertMode(metadata: MetadataJ, expectedMode: String): Unit = {
+    // Fetch it through the config property and verify
+    assert(metadata.getConfiguration.get("delta.columnMapping.mode") == expectedMode)
+    // Fetch it through the API on [[Metadata]] and verify
+    assert(metadata.getColumnMappingMode == expectedMode)
+  }
+
+  private def assertMode(metadata: Metadata, expectedMode: String): Unit = {
+    assert(metadata.configuration.get("delta.columnMapping.mode") == Some(expectedMode))
+  }
 
   private def extractIdsAndPhyNames(
       schema: StructType): (Map[Seq[String], Long], Map[Seq[String], String]) = {

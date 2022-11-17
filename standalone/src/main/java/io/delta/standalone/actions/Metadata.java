@@ -211,6 +211,20 @@ public final class Metadata implements Action {
         throw DeltaErrors.unsupportedColumnMappingMode(mode);
     }
 
+    /**
+     * Return the column mapping mode set in this {@link Metadata}. Returned value is one of:
+     *  <ul>
+     *      <li>none - there is no column mapping mode set</li>
+     *      <li>name - column physical name in metadata is used to represent the
+     *                 column in the data file</li>
+     *      <li>id - column id in metadata is used to represent the column in the data file</li>
+     *  </ul>
+     * @return the column mapping mode set in this {@link Metadata}.
+     */
+    public String getColumnMappingMode() {
+        return configuration.getOrDefault(DeltaConfigs.COLUMN_MAPPING_MODE().key(), "none");
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
