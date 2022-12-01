@@ -91,6 +91,7 @@ private[standalone] object SchemaUtils {
    *   - Drops any column that is present in the current schema
    *   - Converts nullable=true to nullable=false for any column
    *   - Changes any datatype
+   *   - Adds a new column invariant or changes an existing column invariant for any column
    */
   def isWriteCompatible(existingSchema: StructType, newSchema: StructType): Boolean = {
 
@@ -134,12 +135,45 @@ private[standalone] object SchemaUtils {
             // if existing value is nullable, so should be the new value
             && (!existingField.isNullable || newField.isNullable)
             // and the type of the field must be compatible, too
-            && isDatatypeWriteCompatible(existingField.getDataType, newField.getDataType))
+            && isDatatypeWriteCompatible(existingField.getDataType, newField.getDataType)
+            // and no column invariant is added or altered
+            && Option(newField.getMetadata.get(InvariantUtils.INVARIANTS_FIELD)).forall(
+              _ == existingField.getMetadata.get(InvariantUtils.INVARIANTS_FIELD)))
         }
       }
     }
 
     isStructWriteCompatible(existingSchema, newSchema)
+  }
+
+  /**
+   * Finds `StructField`s that match a given check `f`. Returns the path to the column, and the
+   * field.
+   *
+   * @param checkComplexTypes While `StructType` is also a complex type, since we're returning
+   *                          StructFields, we definitely recurse into StructTypes. This flag
+   *                          defines whether we should recurse into ArrayType and MapType.
+   */
+  def filterRecursively(
+    schema: StructType,
+    checkComplexTypes: Boolean)(f: StructField => Boolean): Seq[(Seq[String], StructField)] = {
+    def recurseIntoComplexTypes(
+      complexType: DataType,
+      columnStack: Seq[String]): Seq[(Seq[String], StructField)] = complexType match {
+      case s: StructType =>
+        s.getFields.flatMap { sf =>
+          val includeLevel = if (f(sf)) Seq((columnStack, sf)) else Nil
+          includeLevel ++ recurseIntoComplexTypes(sf.getDataType, columnStack :+ sf.getName)
+        }
+      case a: ArrayType if checkComplexTypes =>
+        recurseIntoComplexTypes(a.getElementType, columnStack :+ "element")
+      case m: MapType if checkComplexTypes =>
+        recurseIntoComplexTypes(m.getKeyType, columnStack :+ "key") ++
+          recurseIntoComplexTypes(m.getValueType, columnStack :+ "value")
+      case _ => Nil
+    }
+
+    recurseIntoComplexTypes(schema, Nil)
   }
 
   ///////////////////////////////////////////////////////////////////////////

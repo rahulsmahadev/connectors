@@ -423,6 +423,10 @@ private[internal] object DeltaErrors {
       "Schema changes are not allowed during the change of column mapping mode.")
   }
 
+  def misformattedInvariant(expr: String): Throwable = {
+    new IllegalStateException(s"Misformatted invariant: $expr")
+  }
+
   def missingColumnId(mode: DeltaColumnMappingMode, field: String): Throwable = {
     new ColumnMappingException(s"Missing column ID in column mapping mode `${mode.name}`" +
       s" in the field: $field")

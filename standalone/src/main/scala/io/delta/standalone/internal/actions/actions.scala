@@ -28,7 +28,7 @@ import io.delta.standalone.types.StructType
 
 import io.delta.standalone.internal.{ConstraintImpl, DeltaColumnMapping, DeltaColumnMappingMode, DeltaConfigs, IdMapping, NameMapping}
 import io.delta.standalone.internal.exception.DeltaErrors
-import io.delta.standalone.internal.util.{DataTypeParser, JsonUtils}
+import io.delta.standalone.internal.util.{DataTypeParser, InvariantUtils, JsonUtils}
 
 private[internal] object Action {
   /** The maximum version of the protocol that this version of Delta Standalone understands. */
@@ -89,7 +89,12 @@ private[internal] object Protocol {
       s"protocol version ($MIN_WRITER_VERSION_PROP) as part of table properties")
   }
 
-  /** Check that the protocol is compatible with any features enabled in the table metadata */
+  /**
+   * Checks that the table protocol is sufficient for any features enabled in the table metadata.
+   * For writer features, we check for sufficient writer version. For reader features, we check
+   * for sufficient reader version. And for reader and writer features, we check for sufficient
+   * reader and writer version.
+   */
   def checkMetadataFeatureProtocolCompatibility(metadata: Metadata, protocol: Protocol): Unit = {
 
     def insufficientProtocol(requiredProtocol: Protocol): Boolean = {
@@ -100,7 +105,12 @@ private[internal] object Protocol {
     // look at Protocol.requiredMinimumProtocol in Delta
 
     // Column invariants
-    // check for invariants in the schema
+    val columnInvariantsMinProtocol = Protocol(0, 2)
+    if (InvariantUtils.getFromSchema(metadata.schema).size > 0 &&
+      insufficientProtocol(columnInvariantsMinProtocol)) {
+      throw DeltaErrors.insufficientTableProtocolVersion(protocol,
+        columnInvariantsMinProtocol, "columnInvariants")
+    }
 
     // Append-only
     val appendOnlyMinProtocol = Protocol(0, 2)
