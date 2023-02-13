@@ -37,6 +37,53 @@ import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
+
+
+object ArrowConversionUtils {
+
+  def convertFieldVectorToAddFile(vector: StructVector, index: Int): AddFile = {
+    val path = vector
+      .getChild("path").asInstanceOf[VarCharVector]
+      .getObject(index)
+
+    val modificationTime = vector
+      .getChild("modificationTime").asInstanceOf[BigIntVector]
+      .getObject(index)
+
+    val size = vector
+      .getChild("size").asInstanceOf[BigIntVector]
+      .getObject(index)
+
+    val dataChange = vector
+      .getChild("dataChange").asInstanceOf[BitVector]
+      .getObject(index)
+
+    val statsText = vector
+      .getChild("stats").asInstanceOf[VarCharVector]
+      .getObject(index)
+
+    val stats = if (statsText == null) {
+      null
+    } else {
+      statsText.toString
+    }
+
+    //TODO map type
+
+    AddFile(
+      path.toString,
+      Map.empty,
+      size,
+      modificationTime,
+      dataChange,
+      stats,
+      Map.empty
+    )
+
+  }
+
+}
+
 /**
  * Helper singleton to create Arrow schema for the corresponding items.
  */
@@ -440,44 +487,6 @@ private[internal] class SnapshotArrowImpl(
         // computeEngine.close()
       }
 
-      def convertFieldVectorToAddFile(vector: StructVector, index: Int): AddFile = {
-        val path = vector
-          .getChild("path").asInstanceOf[VarCharVector]
-          .getObject(index)
-
-        val modificationTime = vector
-          .getChild("modificationTime").asInstanceOf[BigIntVector]
-          .getObject(index)
-
-        val size = vector
-          .getChild("size").asInstanceOf[BigIntVector]
-          .getObject(index)
-
-        val dataChange = vector
-          .getChild("dataChange").asInstanceOf[BitVector]
-          .getObject(index)
-
-        val statsText = vector
-          .getChild("stats").asInstanceOf[VarCharVector]
-          .getObject(index)
-
-        val stats = if (statsText == null) {
-          null
-        } else {
-          statsText.toString
-        }
-
-        AddFile(
-          path.toString,
-          Map.empty,
-          size,
-          modificationTime,
-          dataChange,
-          stats,
-          Map.empty
-        )
-
-      }
 
       val activeFiles: Seq[AddFile] = vsrBatches.flatMap { batch =>
         (for (i <- 0 until batch.getRowCount) yield i).flatMap { index =>
@@ -486,7 +495,7 @@ private[internal] class SnapshotArrowImpl(
             .getChild("path").asInstanceOf[VarCharVector]
             .getObject(index)
           if (path != null) {
-            Some(convertFieldVectorToAddFile(
+            Some(ArrowConversionUtils.convertFieldVectorToAddFile(
               batch.getVector("add").asInstanceOf[StructVector], index))
           } else {
             None
