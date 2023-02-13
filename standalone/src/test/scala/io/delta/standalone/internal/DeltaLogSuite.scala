@@ -679,6 +679,20 @@ abstract class DeltaLogSuiteBase extends FunSuite {
     }
   }
 
+  test("delta log v2 - with checkpoint") {
+    // scalastyle:off println
+
+    println("this test works")
+    withLogForGoldenTable("checkpoint") { _log =>
+      val conf = FakeFileSystem.newConfiguration()
+      val path = new Path("fake://" + _log.getPath.toUri.getRawPath)
+      val log = DeltaLog.forTable(conf, path)
+      println(s"path is ${path}")
+      log.snapshot().getAllFiles()
+    }
+    // scalastyle:on println
+  }
+
   test("delta log v2") {
     // scalastyle:off println
 

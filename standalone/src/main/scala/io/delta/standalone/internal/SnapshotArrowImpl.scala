@@ -16,8 +16,9 @@
 package io.delta.standalone.internal
 
 // scalastyle:off
-import io.delta.standalone.internal.actions.{AddFile, CustomJsonIterator, SingleAction}
-import io.delta.standalone.internal.util.JsonUtils
+import com.github.mjakubowski84.parquet4s.ParquetReader
+import io.delta.standalone.internal.actions.{AddFile, CustomJsonIterator, CustomParquetIterator, Parquet4sSingleActionWrapper, SingleAction}
+import io.delta.standalone.internal.util.{FileNames, JsonUtils}
 import org.apache.arrow.flatbuf.RecordBatch
 import org.apache.arrow.vector.VectorSchemaRoot
 import org.apache.arrow.vector.complex.{ListVector, MapVector, StructVector}
@@ -36,8 +37,6 @@ import java.util.Arrays.asList
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-
-
 
 object ArrowConversionUtils {
 
@@ -394,9 +393,30 @@ class ComputeEngine {
     convertSingleActionsToArrow(actions)
   }
 
-  // TODO: Support reading parquet files for data reads and checkpoint reads.
   def readParquetAsArrow(path: Path): VectorSchemaRoot = {
-    throw new Exception("Reading parquet files is not yet supported.")
+    // HACK: removing the fake: from the path.
+    val strippedPath = new File(path.toString.substring(5))
+    println(s"Reading file ${strippedPath} as an arrow table")
+    val parquetIterable = ParquetReader.read[Parquet4sSingleActionWrapper](
+      strippedPath.toString,
+      ParquetReader.Options()
+    )
+    // TODO copy other type of actiosn
+    val actions = parquetIterable.flatMap {
+      case sa: Parquet4sSingleActionWrapper if sa.add != null =>
+        Some(sa.add.wrap)
+      case _ =>
+        None
+    }
+    actions.foreach {
+      case single: SingleAction if single.add != null =>
+        println("add file")
+      case single: SingleAction if single.remove != null =>
+        println("Remove")
+      case _ =>
+        println("Other")
+    }
+    convertSingleActionsToArrow(actions.toSeq)
   }
 }
 
@@ -469,39 +489,43 @@ private[internal] class SnapshotArrowImpl(
     }
 
     private def arrowLogReplay(
-        logFiles: Seq[Path],
-        checkpointFiles: Seq[Path],
+        files: Seq[Path],
         filter: Option[String] = None): Seq[VectorSchemaRoot] = {
 
-      logFiles.reverse.map { file =>
-        replayFile(file, JsonLogFile())
+      files.reverse.map { file =>
+        if (FileNames.isDeltaFile(file)) {
+          replayFile(file, JsonLogFile())
+        } else if (FileNames.isCheckpointFile(file)) {
+          replayFile(file, ParquetLogFile())
+        } else {
+          throw new Exception(s"Unexpected file format for file - ${file}")
+        }
       }
     }
 
     override lazy val state: SnapshotImpl.State = {
       val files = super.files
 
-      val vsrBatches = try {
-        arrowLogReplay(files, Seq.empty, None)
-      } finally {
-        // computeEngine.close()
-      }
-
-
-      val activeFiles: Seq[AddFile] = vsrBatches.flatMap { batch =>
-        (for (i <- 0 until batch.getRowCount) yield i).flatMap { index =>
-          val path = batch.getVector("add")
-            .asInstanceOf[StructVector]
-            .getChild("path").asInstanceOf[VarCharVector]
-            .getObject(index)
-          if (path != null) {
-            Some(ArrowConversionUtils.convertFieldVectorToAddFile(
-              batch.getVector("add").asInstanceOf[StructVector], index))
-          } else {
-            None
+      val activeFiles: Seq[AddFile] = try {
+        val vsrBatches = arrowLogReplay(files, None)
+        vsrBatches.flatMap { batch =>
+          (for (i <- 0 until batch.getRowCount) yield i).flatMap { index =>
+            val path = batch.getVector("add")
+              .asInstanceOf[StructVector]
+              .getChild("path").asInstanceOf[VarCharVector]
+              .getObject(index)
+            if (path != null) {
+              Some(ArrowConversionUtils.convertFieldVectorToAddFile(
+                batch.getVector("add").asInstanceOf[StructVector], index))
+            } else {
+              None
+            }
           }
         }
+      } finally {
+        computeEngine.close()
       }
+
       println(activeFiles)
 
       SnapshotImpl.State(
