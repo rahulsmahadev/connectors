@@ -683,7 +683,7 @@ abstract class DeltaLogSuiteBase extends FunSuite {
     // scalastyle:off println
 
     println("this test works")
-    withLogForWritableGoldenTable("data-reader-primitives") { _log =>
+    withLogForGoldenTable("snapshot-data2-deleted") { _log =>
       val conf = FakeFileSystem.newConfiguration()
       val path = new Path("fake://" + _log.getPath.toUri.getRawPath)
       val log = DeltaLog.forTable(conf, path)

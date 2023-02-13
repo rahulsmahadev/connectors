@@ -106,7 +106,7 @@ private[internal] sealed trait FileAction extends Action {
  * are seen with the same `path` only the metadata from the last one is
  * kept.
  */
-private[internal] case class AddFile(
+  case class AddFile(
     path: String,
     @JsonInclude(JsonInclude.Include.ALWAYS)
     partitionValues: Map[String, String],
